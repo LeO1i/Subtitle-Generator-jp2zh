@@ -54,7 +54,7 @@ echo 依赖安装完成 ✓
 
 echo.
 echo 正在验证关键依赖导入...
-python -c "import torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr" >nul 2>&1
+python -c "import torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr, PySide6, opencc, numpy, sklearn, resemblyzer" >nul 2>&1
 if errorlevel 1 (
     echo 导入检查失败。请运行：pip install -r requirements.txt
     pause

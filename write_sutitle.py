@@ -1,5 +1,6 @@
 import os
 import subprocess
+from pathlib import Path
 
 from ffmpeg_utils import find_ffmpeg, subprocess_kwargs
 
@@ -68,43 +69,57 @@ class WriteSubtitle:
             print(f"提取中文字幕时出错：{e}")
             return None
 
+    def _sidecar_ass_path(self, subtitle_path):
+        path = Path(subtitle_path)
+        if path.name.endswith("_bilingual.srt"):
+            return str(path.with_name(path.name.replace("_bilingual.srt", "_styled.ass")))
+        return str(path.with_suffix(".ass"))
+
     def burn_subtitles(self, video_path, srt_path, output_path, font_name='Microsoft YaHei'):
         """
         Use FFmpeg to burn the chinese subtitle to the bottom of video and output the new video
         """
         print("正在将字幕烧录到视频中...")
         try:
-            # Check if this is a bilingual SRT file and extract Chinese-only if needed
+            # Prefer generated ASS because it carries per-speaker color styles.
             temp_chinese_srt = None
-            srt_to_use = srt_path
+            subtitle_to_use = srt_path
+            subtitle_ext = os.path.splitext(srt_path)[1].lower()
+
+            sidecar_ass = self._sidecar_ass_path(srt_path)
+            if subtitle_ext != ".ass" and os.path.exists(sidecar_ass):
+                print(f"检测到彩色 ASS 字幕，将使用：{sidecar_ass}")
+                subtitle_to_use = sidecar_ass
+                subtitle_ext = ".ass"
             
-            # Read first few lines to check if it's bilingual
-            with open(srt_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
-            # Check if it's bilingual (has both Chinese and Japanese)
-            is_bilingual = False
-            for i, line in enumerate(lines):
-                if i > 20:  # Check first 20 lines
-                    break
-                line = line.strip()
-                # Look for Japanese characters
-                if any(ord(char) > 127 for char in line) and any(0x3040 <= ord(char) <= 0x309F or 0x30A0 <= ord(char) <= 0x30FF for char in line):
-                    is_bilingual = True
-                    break
-            
-            if is_bilingual:
-                print("检测到双语 SRT 文件，正在提取中文字幕...")
-                temp_chinese_srt = srt_path.replace('.srt', '_temp_chinese.srt')
-                extracted_srt = self.extract_chinese_from_bilingual_srt(srt_path, temp_chinese_srt)
-                if extracted_srt:
-                    srt_to_use = extracted_srt
-                else:
-                    print("警告：提取中文字幕失败，将使用原始文件")
+            if subtitle_ext != ".ass":
+                # Read first few lines to check if it's bilingual
+                with open(srt_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                
+                # Check if it's bilingual (has both Chinese and Japanese)
+                is_bilingual = False
+                for i, line in enumerate(lines):
+                    if i > 20:  # Check first 20 lines
+                        break
+                    line = line.strip()
+                    # Look for Japanese characters
+                    if any(ord(char) > 127 for char in line) and any(0x3040 <= ord(char) <= 0x309F or 0x30A0 <= ord(char) <= 0x30FF for char in line):
+                        is_bilingual = True
+                        break
+                
+                if is_bilingual:
+                    print("检测到双语 SRT 文件，正在提取中文字幕...")
+                    temp_chinese_srt = srt_path.replace('.srt', '_temp_chinese.srt')
+                    extracted_srt = self.extract_chinese_from_bilingual_srt(srt_path, temp_chinese_srt)
+                    if extracted_srt:
+                        subtitle_to_use = extracted_srt
+                    else:
+                        print("警告：提取中文字幕失败，将使用原始文件")
             
             ffmpeg_bin = find_ffmpeg()
             # Using POSIX style path
-            srt_escaped = self._escape_path_for_ffmpeg_subtitles(srt_to_use)
+            subtitle_escaped = self._escape_path_for_ffmpeg_subtitles(subtitle_to_use)
 
             safe_font = font_name.replace("'", "\'")
             # 15% smaller than previous 28.
@@ -118,7 +133,10 @@ class WriteSubtitle:
                 f"Outline=2,Shadow=0,MarginV={margin_v}'"
             )
 
-            vf_arg = f"subtitles=filename='{srt_escaped}':charenc=UTF-8:force_style={force_style}"
+            if subtitle_ext == ".ass":
+                vf_arg = f"subtitles=filename='{subtitle_escaped}':charenc=UTF-8"
+            else:
+                vf_arg = f"subtitles=filename='{subtitle_escaped}':charenc=UTF-8:force_style={force_style}"
 
             cmd = [
                 ffmpeg_bin,

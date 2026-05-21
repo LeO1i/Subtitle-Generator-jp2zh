@@ -1,4 +1,5 @@
 import datetime
+import gc
 import json
 import os
 import re
@@ -21,6 +22,15 @@ try:
     from qwen_asr import Qwen3ASRModel
 except ImportError:
     Qwen3ASRModel = None
+try:
+    from opencc import OpenCC
+except ImportError:
+    OpenCC = None
+try:
+    from speaker_diarize import assign_speaker, get_top_speaker_windows
+except ImportError:
+    assign_speaker = None
+    get_top_speaker_windows = None
 
 
 class ASREngine:
@@ -85,6 +95,13 @@ class ASREngine:
             raise ImportError("缺少 transformers 包。请运行 pip install -r requirements.txt")
         self._backend = "transformers"
         self._pipeline = self._build_pipeline()
+
+    def release(self):
+        self._pipeline = None
+        self._qwen_model = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
 
     def _build_qwen_model(self):
         use_cuda = self.device.startswith("cuda") and torch.cuda.is_available()
@@ -337,13 +354,15 @@ class ASREngine:
 
 
 class TranslationEngine:
-    def __init__(self, primary_model_id, advanced_model_id, use_advanced=False, device=None):
+    def __init__(self, primary_model_id, advanced_model_id, use_advanced=False, device=None, target_script="traditional"):
         if pipeline is None and (AutoModelForCausalLM is None or AutoTokenizer is None):
             raise ImportError("缺少 transformers 包。请运行 pip install -r requirements.txt")
         self.primary_model_id = primary_model_id
         self.advanced_model_id = advanced_model_id
         self.use_advanced = use_advanced
         self.device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.target_script = target_script
+        self._opencc = self._build_opencc_converter(target_script)
         self.memory = {}
         self._backend = "pipeline"
         self._pipeline = None
@@ -351,6 +370,18 @@ class TranslationEngine:
         self._model = None
         self.effective_model_id = None
         self._load_pipeline()
+
+    @staticmethod
+    def _build_opencc_converter(target_script):
+        if OpenCC is None:
+            return None
+        normalized = str(target_script or "").strip().lower()
+        if normalized in {"traditional", "繁體", "繁体", "zh-tw", "tw", "s2t"}:
+            try:
+                return OpenCC("s2t")
+            except Exception:
+                return None
+        return None
 
     def _is_hy_mt_model(self, model_id):
         text = (model_id or "").lower()
@@ -411,7 +442,7 @@ class TranslationEngine:
 
     def _make_prompt(self, text):
         return (
-            "Translate the following Japanese subtitle into natural Simplified Chinese. "
+            "Translate the following Japanese subtitle into natural Traditional Chinese. "
             "Keep names and special terms stable.\n"
             f"Japanese: {text}\nChinese:"
         )
@@ -421,7 +452,7 @@ class TranslationEngine:
             {
                 "role": "user",
                 "content": (
-                    "Translate the following segment into Chinese, without additional explanation.\n\n"
+                    "Translate the following segment into natural Traditional Chinese, without additional explanation.\n\n"
                     f"{text}"
                 ),
             }
@@ -459,7 +490,8 @@ class TranslationEngine:
         if self._backend == "hy_chat":
             translated = self._translate_with_hy_chat(key)
         else:
-            prompt = self._make_prompt(key)
+            is_translation_task = self._task_name == "translation"
+            prompt = key if is_translation_task else self._make_prompt(key)
             kwargs = {"max_new_tokens": 128, "do_sample": False}
             try:
                 result = self._pipeline(prompt, **kwargs)
@@ -478,15 +510,45 @@ class TranslationEngine:
             if translated.startswith(prompt):
                 translated = translated[len(prompt):].strip()
         translated = JapaneseVideoSubtitleGenerator.apply_glossary(key, translated, glossary)
+        if self._opencc is not None:
+            translated = self._opencc.convert(translated)
         self.memory[key] = translated or key
         return self.memory[key]
 
+    def release(self):
+        self._pipeline = None
+        self._tokenizer = None
+        self._model = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+
 
 class JapaneseVideoSubtitleGenerator:
-    DEFAULT_ASR_MODEL = "Qwen/Qwen3-ASR-1.7B"
-    DEFAULT_MT_MODEL = "tencent/HY-MT1.5-1.8B"
+    DEFAULT_ASR_MODEL = "Qwen/Qwen3-ASR-0.6B"
+    DEFAULT_MT_MODEL = "Helsinki-NLP/opus-mt-ja-zh"
     DEFAULT_ADV_MT_MODEL = "tencent/HY-MT1.5-7B"
-    CHECKPOINT_VERSION = 5
+    MODEL_TIERS = {
+        "fast": {
+            "asr": "Qwen/Qwen3-ASR-0.6B",
+            "mt": "Helsinki-NLP/opus-mt-ja-zh",
+            "chunk_size": 90,
+            "quality": "fast",
+        },
+        "balanced": {
+            "asr": "Qwen/Qwen3-ASR-0.6B",
+            "mt": "tencent/HY-MT1.5-1.8B",
+            "chunk_size": 90,
+            "quality": "fast",
+        },
+        "accurate": {
+            "asr": "Qwen/Qwen3-ASR-1.7B",
+            "mt": "tencent/HY-MT1.5-1.8B",
+            "chunk_size": 60,
+            "quality": "accurate",
+        },
+    }
+    CHECKPOINT_VERSION = 6
     AUDIO_PRESET_STANDARD = "standard"
     AUDIO_PRESET_DENOISE = "denoise"
     AUDIO_PRESET_AGGRESSIVE = "aggressive"
@@ -508,7 +570,7 @@ class JapaneseVideoSubtitleGenerator:
 
     def __init__(
         self,
-        model_name="Qwen/Qwen3-ASR-1.7B",
+        model_name=None,
         device=None,
         asr_model_id=None,
         mt_model_id=None,
@@ -519,22 +581,33 @@ class JapaneseVideoSubtitleGenerator:
         asr_terms_path=None,
         audio_preset=AUDIO_PRESET_STANDARD,
         progress_callback=None,
+        model_tier=None,
+        enable_speaker_diarization=True,
+        target_script="traditional",
     ):
         self.device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.asr_model_id = asr_model_id or self._resolve_asr_model(model_name)
-        self.mt_model_id = self._normalize_mt_model_id(mt_model_id or self.DEFAULT_MT_MODEL)
+        self.model_tier = self.resolve_model_tier(model_tier)
+        tier_config = self.MODEL_TIERS[self.model_tier]
+        self.asr_model_id = asr_model_id or self._resolve_asr_model(tier_config.get("asr") or model_name)
+        self.mt_model_id = self._normalize_mt_model_id(mt_model_id or tier_config.get("mt") or self.DEFAULT_MT_MODEL)
         self.mt_advanced_model_id = self._normalize_mt_model_id(mt_advanced_model_id or self.DEFAULT_ADV_MT_MODEL)
-        self.quality_mode = quality_mode if quality_mode in {"fast", "accurate"} else "fast"
+        self.quality_mode = quality_mode if quality_mode in {"fast", "accurate"} else tier_config.get("quality", "fast")
+        self.enable_speaker_diarization = bool(enable_speaker_diarization)
+        self.target_script = target_script
+        self.use_advanced_mt = use_advanced_mt
         self.glossary_path = glossary_path
         self.glossary = self.load_glossary(glossary_path)
         self.asr_terms_path = asr_terms_path
         self.audio_preset = self.resolve_audio_preset(audio_preset)
         self.asr_terms, self.asr_corrections = self.load_asr_terms(asr_terms_path)
         self.progress_callback = progress_callback
+        self.translation_engine = None
         print(f"ASR 模型：{self.asr_model_id}")
         print(f"MT 模型：{self.mt_model_id}（高级：{self.mt_advanced_model_id}）")
+        print(f"模型档位：{self.model_tier}")
         print(f"设备偏好：{self.device}")
         print(f"音频增强预设：{self.audio_preset}")
+        print(f"说话人识别：{'启用' if self.enable_speaker_diarization else '关闭'}")
         if self.asr_terms:
             print(f"ASR 术语条目：{len(self.asr_terms)}")
         if self.asr_corrections:
@@ -545,13 +618,40 @@ class JapaneseVideoSubtitleGenerator:
             asr_terms=self.asr_terms,
             asr_corrections=self.asr_corrections,
         )
+    @classmethod
+    def resolve_model_tier(cls, model_tier):
+        normalized = str(model_tier or "fast").strip().lower()
+        if normalized in cls.MODEL_TIERS:
+            return normalized
+        return "fast"
+
+    def ensure_translation_engine(self):
+        if self.translation_engine is not None:
+            return self.translation_engine
         self.translation_engine = TranslationEngine(
             primary_model_id=self.mt_model_id,
             advanced_model_id=self.mt_advanced_model_id,
-            use_advanced=use_advanced_mt,
+            use_advanced=self.use_advanced_mt,
             device=self.device,
+            target_script=self.target_script,
         )
         print(f"最终使用的 MT 模型：{self.translation_engine.effective_model_id}")
+        return self.translation_engine
+
+    def release_asr_engine(self):
+        if self.asr_engine is not None:
+            self.asr_engine.release()
+            self.asr_engine = None
+
+    def ensure_asr_engine(self):
+        if self.asr_engine is None:
+            self.asr_engine = ASREngine(
+                model_id=self.asr_model_id,
+                device=self.device,
+                asr_terms=self.asr_terms,
+                asr_corrections=self.asr_corrections,
+            )
+        return self.asr_engine
 
     def _emit_progress(self, percent, message):
         callback = self.progress_callback
@@ -891,11 +991,12 @@ class JapaneseVideoSubtitleGenerator:
         for current in ordered[1:]:
             prev = merged[-1]
             same_text = prev["text"].strip() == current["text"].strip()
+            same_speaker = prev.get("speaker_id") == current.get("speaker_id")
             near_boundary = current["start"] - prev["end"] <= 1.0
-            if same_text and near_boundary:
+            if same_text and same_speaker and near_boundary:
                 prev["end"] = max(prev["end"], current["end"])
                 prev["confidence"] = max(prev.get("confidence", 1.0), current.get("confidence", 1.0))
-            elif current["start"] < prev["end"] and same_text:
+            elif current["start"] < prev["end"] and same_text and same_speaker:
                 prev["end"] = max(prev["end"], current["end"])
             else:
                 merged.append(current)
@@ -952,6 +1053,7 @@ class JapaneseVideoSubtitleGenerator:
                     "text": unit,
                     "confidence": float(segment.get("confidence", 1.0)),
                     "quality_flagged": bool(segment.get("quality_flagged", False)),
+                    "speaker_id": segment.get("speaker_id"),
                 }
             )
             cursor = expanded[-1]["end"]
@@ -981,10 +1083,12 @@ class JapaneseVideoSubtitleGenerator:
             prev_short = len(prev_text) < 16 or prev_duration < 1.6
             prev_incomplete = not re.search(r"[。！？!?]$", prev_text)
             curr_tiny = len(curr_text) < 10
+            same_speaker = prev.get("speaker_id") == current.get("speaker_id")
             can_merge = (
                 gap <= 0.45
                 and len(combined_text) <= 52
                 and combined_duration <= 8.0
+                and same_speaker
                 and (prev_short or prev_incomplete or curr_tiny)
             )
             if can_merge:
@@ -1001,7 +1105,7 @@ class JapaneseVideoSubtitleGenerator:
         self,
         video_path,
         output_dir=None,
-        chunk_size_seconds=120,
+        chunk_size_seconds=None,
         overlap_seconds=1.5,
         quality_mode=None,
         glossary_path=None,
@@ -1021,7 +1125,8 @@ class JapaneseVideoSubtitleGenerator:
         active_quality = quality_mode if quality_mode in {"fast", "accurate"} else self.quality_mode
         active_audio_preset = self.resolve_audio_preset(audio_preset or self.audio_preset)
         active_audio_filter = self.get_audio_filter_chain(active_audio_preset)
-        active_chunk_size = int(chunk_size_seconds)
+        tier_chunk_size = int(self.MODEL_TIERS[self.model_tier].get("chunk_size", 90))
+        active_chunk_size = int(chunk_size_seconds or tier_chunk_size)
         active_overlap = float(overlap_seconds)
         if glossary_path and glossary_path != self.glossary_path:
             self.glossary_path = glossary_path
@@ -1029,9 +1134,13 @@ class JapaneseVideoSubtitleGenerator:
         if asr_terms_path and asr_terms_path != self.asr_terms_path:
             self.asr_terms_path = asr_terms_path
             self.asr_terms, self.asr_corrections = self.load_asr_terms(asr_terms_path)
-            self.asr_engine.asr_terms = list(self.asr_terms)
-            self.asr_engine.asr_corrections = dict(self.asr_corrections)
-            self.asr_engine.qwen_prompt = self.asr_engine._build_qwen_prompt(self.asr_terms)
+            asr_engine = self.ensure_asr_engine()
+            asr_engine.asr_terms = list(self.asr_terms)
+            asr_engine.asr_corrections = dict(self.asr_corrections)
+            asr_engine.qwen_prompt = asr_engine._build_qwen_prompt(self.asr_terms)
+        if active_quality == "fast" and active_chunk_size >= 120 and self.model_tier == "fast":
+            active_chunk_size = 90
+            print("快速档位已自动调整分块时长为 90 秒，以降低显存和内存压力。")
         if active_quality == "accurate" and active_chunk_size >= 120:
             active_chunk_size = 60
             print("精确模式已自动调整分块时长为 60 秒，以提升复杂噪声音频识别稳定性。")
@@ -1041,6 +1150,7 @@ class JapaneseVideoSubtitleGenerator:
         video_name = os.path.splitext(os.path.basename(video_path))[0]
         audio_path = os.path.join(output_dir, f"{video_name}_{uuid.uuid4().hex}_temp.wav")
         subtitle_path = os.path.join(output_dir, f"{video_name}_bilingual.srt")
+        ass_subtitle_path = os.path.join(output_dir, f"{video_name}_styled.ass")
         checkpoint_dir = os.path.join(output_dir, f"{video_name}_checkpoints")
 
         print(
@@ -1050,9 +1160,23 @@ class JapaneseVideoSubtitleGenerator:
         print(f"检查点目录：{checkpoint_dir}")
 
         all_segments = []
+        checkpoint_translation_memory = {}
         try:
             self._emit_progress(0.0, "正在提取音频...")
             self.extract_audio(video_path, audio_path, audio_preset=active_audio_preset)
+            speaker_windows = []
+            if self.enable_speaker_diarization and get_top_speaker_windows is not None and assign_speaker is not None:
+                try:
+                    self._emit_progress(3.0, "正在识别说话人...")
+                    speaker_windows = get_top_speaker_windows(audio_path, top_n=3)
+                    if speaker_windows:
+                        speakers = sorted({window.speaker_id for window in speaker_windows})
+                        print(f"已识别并保留前 3 位响度说话人：{', '.join(speakers)}")
+                    else:
+                        print("未检测到可靠说话人窗口，将转写全部语音。")
+                except Exception as err:
+                    print(f"说话人识别失败，已回退为转写全部语音：{err}")
+                    speaker_windows = []
             chunks = self.split_audio_chunks(audio_path, active_chunk_size, active_overlap)
             total_chunks = max(1, len(chunks))
             for chunk in chunks:
@@ -1061,7 +1185,7 @@ class JapaneseVideoSubtitleGenerator:
                     print(f"继续处理：分块 {chunk['index']} 已完成")
                     all_segments.extend(existing.get("segments", []))
                     for source, target in existing.get("translation_memory", {}).items():
-                        self.translation_engine.memory[source] = target
+                        checkpoint_translation_memory[source] = target
                     progress = ((chunk["index"] + 1) / total_chunks) * 95.0
                     self._emit_progress(progress, f"已续跑分块 {chunk['index'] + 1}/{total_chunks}")
                     continue
@@ -1079,7 +1203,8 @@ class JapaneseVideoSubtitleGenerator:
                         f"正在处理分块 {chunk['index'] + 1}/{total_chunks}",
                     )
                     self.extract_audio_span(audio_path, chunk_audio_path, chunk["start"], chunk["end"])
-                    local_segments = self.asr_engine.transcribe(chunk_audio_path, quality_mode=active_quality)
+                    asr_engine = self.ensure_asr_engine()
+                    local_segments = asr_engine.transcribe(chunk_audio_path, quality_mode=active_quality)
                     chunk_duration = max(0.1, chunk["end"] - chunk["start"])
                     if self._looks_like_single_block(local_segments, chunk_duration):
                         print("检测到 ASR 时间戳较粗糙，使用短窗口重试该分块...")
@@ -1109,10 +1234,17 @@ class JapaneseVideoSubtitleGenerator:
                             "text": segment.get("text", "").strip(),
                             "confidence": float(segment.get("confidence", 1.0)),
                             "quality_flagged": False,
+                            "speaker_id": None,
                         }
                         if not normalized["text"]:
                             prev_segment = segment
                             continue
+                        if speaker_windows:
+                            speaker_id = assign_speaker(normalized, speaker_windows)
+                            if not speaker_id:
+                                prev_segment = segment
+                                continue
+                            normalized["speaker_id"] = speaker_id
                         expanded_segments = self._expand_long_segment(normalized)
                         for expanded in expanded_segments:
                             if self._segment_needs_second_pass(expanded, prev_segment):
@@ -1143,17 +1275,13 @@ class JapaneseVideoSubtitleGenerator:
                                 )
 
                     chunk_segments = self._merge_short_context_segments(chunk_segments)
-
-                    for segment in chunk_segments:
-                        segment["zh_text"] = self.translation_engine.translate(segment["text"], glossary=self.glossary)
-
                     merged_chunk_segments = self._merge_boundary_segments(chunk_segments)
                     checkpoint_payload = {
                         "status": "completed",
                         "chunk_index": chunk["index"],
                         "chunk_meta": chunk,
                         "segments": merged_chunk_segments,
-                        "translation_memory": self.translation_engine.memory,
+                        "translation_memory": checkpoint_translation_memory,
                     }
                     self._save_chunk_checkpoint(checkpoint_dir, chunk["index"], checkpoint_payload)
                     all_segments.extend(merged_chunk_segments)
@@ -1172,10 +1300,24 @@ class JapaneseVideoSubtitleGenerator:
                         os.remove(chunk_audio_path)
 
             merged_segments = self._merge_boundary_segments(all_segments)
+            self._emit_progress(95.5, "正在释放 ASR 并加载翻译模型...")
+            self.release_asr_engine()
+            translation_engine = self.ensure_translation_engine()
+            translation_engine.memory.update(checkpoint_translation_memory)
+            self._emit_progress(96.0, "正在翻译为繁體中文...")
+            total_segments = max(1, len(merged_segments))
+            for index, segment in enumerate(merged_segments, start=1):
+                if not segment.get("zh_text"):
+                    segment["zh_text"] = translation_engine.translate(segment["text"], glossary=self.glossary)
+                if index % 10 == 0 or index == total_segments:
+                    percent = 96.0 + (index / total_segments) * 1.0
+                    self._emit_progress(percent, f"正在翻译字幕 {index}/{total_segments}")
             self._emit_progress(97.0, "正在写入字幕文件...")
             self.generate_bilingual_srt(merged_segments, subtitle_path)
+            self.generate_chinese_ass(merged_segments, ass_subtitle_path)
             self._emit_progress(100.0, "字幕生成完成")
             print(f"处理完成。字幕文件：{subtitle_path}")
+            print(f"已生成彩色 ASS 字幕：{ass_subtitle_path}")
             return subtitle_path
         except Exception as e:
             print(f"处理过程中发生错误：{e}")
@@ -1195,3 +1337,56 @@ class JapaneseVideoSubtitleGenerator:
                 f.write(f"{segment['text'].strip()}\n{segment.get('zh_text', '').strip()}\n\n")
                 if index % 20 == 0:
                     print(f"字幕写入进度：{index}/{len(cleaned)}")
+
+    @staticmethod
+    def format_ass_time(seconds):
+        seconds = max(0.0, float(seconds))
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        whole_seconds = int(seconds % 60)
+        centiseconds = int((seconds - int(seconds)) * 100)
+        return f"{hours}:{minutes:02d}:{whole_seconds:02d}.{centiseconds:02d}"
+
+    @staticmethod
+    def _escape_ass_text(text):
+        escaped = str(text or "").replace("\\", "\\\\").replace("{", "(").replace("}", ")")
+        return escaped.replace("\n", "\\N")
+
+    @staticmethod
+    def _speaker_prefix(speaker_id):
+        mapping = {"Speaker1": "【A】", "Speaker2": "【B】", "Speaker3": "【C】"}
+        return mapping.get(str(speaker_id or ""), "")
+
+    def generate_chinese_ass(self, segments, output_path):
+        print("正在生成彩色 ASS 中文字幕...")
+        cleaned = [s for s in segments if s.get("zh_text", "").strip()]
+        cleaned.sort(key=lambda x: x["start"])
+        header = """[Script Info]
+ScriptType: v4.00+
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Speaker1,Microsoft YaHei,24,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,2,40,40,45,1
+Style: Speaker2,Microsoft YaHei,24,&H0000FFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,2,40,40,45,1
+Style: Speaker3,Microsoft YaHei,24,&H00FFFF00,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,2,40,40,45,1
+Style: Default,Microsoft YaHei,24,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,2,40,40,45,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(header)
+            for segment in cleaned:
+                speaker_id = segment.get("speaker_id") or "Default"
+                style = speaker_id if speaker_id in {"Speaker1", "Speaker2", "Speaker3"} else "Default"
+                prefix = self._speaker_prefix(speaker_id)
+                text = self._escape_ass_text(f"{prefix}{segment.get('zh_text', '').strip()}")
+                f.write(
+                    "Dialogue: 0,"
+                    f"{self.format_ass_time(segment['start'])},"
+                    f"{self.format_ass_time(segment['end'])},"
+                    f"{style},,0,0,0,,{text}\n"
+                )

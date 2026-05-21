@@ -30,15 +30,19 @@ def main():
     else:
         pass
 
-    asr_model = input("ASR 模型（默认 Qwen/Qwen3-ASR-1.7B）：").strip() or "Qwen/Qwen3-ASR-1.7B"
-    mt_model = input("MT 模型（默认 tencent/HY-MT1.5-1.8B）：").strip() or "tencent/HY-MT1.5-1.8B"
+    tier = input("模型档位 fast/balanced/accurate（默认 fast）：").strip().lower() or "fast"
+    if tier not in {"fast", "balanced", "accurate"}:
+        tier = "fast"
+    default_tier = JapaneseVideoSubtitleGenerator.MODEL_TIERS[tier]
+    asr_model = input(f"ASR 模型（默认 {default_tier['asr']}）：").strip() or default_tier["asr"]
+    mt_model = input(f"MT 模型（默认 {default_tier['mt']}）：").strip() or default_tier["mt"]
     use_advanced_mt = (
         input("是否先启用高级翻译（优先尝试 HY-MT 7B，失败自动回退）？(y/N)：").strip().lower() == "y"
     )
-    quality_mode = input("质量模式 fast/accurate（默认 fast）：").strip().lower() or "fast"
+    quality_mode = input(f"质量模式 fast/accurate（默认 {default_tier['quality']}）：").strip().lower() or default_tier["quality"]
     if quality_mode not in {"fast", "accurate"}:
         quality_mode = "fast"
-    chunk_size_text = input("分块时长（秒，30-600，默认 120）：").strip() or "120"
+    chunk_size_text = input(f"分块时长（秒，30-600，默认 {default_tier['chunk_size']}）：").strip() or str(default_tier["chunk_size"])
     overlap_text = input("分块重叠（秒，0-10，默认 2）：").strip() or "2"
     glossary_path = input("术语表文件路径（可选，直接回车跳过）：").strip() or None
     asr_terms_path = input("ASR 术语/修正文件路径（可选，直接回车跳过）：").strip() or None
@@ -46,14 +50,15 @@ def main():
     if audio_preset not in {"standard", "denoise", "aggressive"}:
         print("音频增强预设无效，已使用默认值 standard。")
         audio_preset = "standard"
+    enable_speaker_diarization = input("是否启用说话人识别并仅保留前 3 位响度说话人？(Y/n)：").strip().lower() != "n"
 
     try:
         chunk_size = int(chunk_size_text)
         if chunk_size < 30 or chunk_size > 600:
             raise ValueError
     except Exception:
-        print("分块时长无效，已使用默认值 120。")
-        chunk_size = 120
+        print(f"分块时长无效，已使用默认值 {default_tier['chunk_size']}。")
+        chunk_size = int(default_tier["chunk_size"])
 
     try:
         overlap_seconds = float(overlap_text)
@@ -79,6 +84,8 @@ def main():
         glossary_path=glossary_path,
         asr_terms_path=asr_terms_path,
         audio_preset=audio_preset,
+        model_tier=tier,
+        enable_speaker_diarization=enable_speaker_diarization,
     )
     # Specify the path of the Japanese video file
     video_path = input("请输入日语视频文件路径：").strip()
