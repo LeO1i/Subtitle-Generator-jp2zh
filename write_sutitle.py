@@ -75,13 +75,26 @@ class WriteSubtitle:
             return str(path.with_name(path.name.replace("_bilingual.srt", "_styled.ass")))
         return str(path.with_suffix(".ass"))
 
+    def _is_generated_bilingual_srt(self, srt_path, lines):
+        path = Path(srt_path)
+        if path.name.endswith("_bilingual.srt"):
+            return True
+
+        for i, line in enumerate(lines):
+            if i > 40:
+                break
+            stripped = line.strip()
+            if any(0x3040 <= ord(char) <= 0x309F or 0x30A0 <= ord(char) <= 0x30FF for char in stripped):
+                return True
+        return False
+
     def burn_subtitles(self, video_path, srt_path, output_path, font_name='Microsoft YaHei'):
         """
-        Use FFmpeg to burn the chinese subtitle to the bottom of video and output the new video
+        Burn Chinese-only subtitles to the bottom of the video.
         """
         print("正在将字幕烧录到视频中...")
         try:
-            # Prefer generated ASS because it carries per-speaker color styles.
+            # Prefer generated ASS because it is already Chinese-only and carries speaker colors.
             temp_chinese_srt = None
             subtitle_to_use = srt_path
             subtitle_ext = os.path.splitext(srt_path)[1].lower()
@@ -93,22 +106,10 @@ class WriteSubtitle:
                 subtitle_ext = ".ass"
             
             if subtitle_ext != ".ass":
-                # Read first few lines to check if it's bilingual
                 with open(srt_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
                 
-                # Check if it's bilingual (has both Chinese and Japanese)
-                is_bilingual = False
-                for i, line in enumerate(lines):
-                    if i > 20:  # Check first 20 lines
-                        break
-                    line = line.strip()
-                    # Look for Japanese characters
-                    if any(ord(char) > 127 for char in line) and any(0x3040 <= ord(char) <= 0x309F or 0x30A0 <= ord(char) <= 0x30FF for char in line):
-                        is_bilingual = True
-                        break
-                
-                if is_bilingual:
+                if self._is_generated_bilingual_srt(srt_path, lines):
                     print("检测到双语 SRT 文件，正在提取中文字幕...")
                     temp_chinese_srt = srt_path.replace('.srt', '_temp_chinese.srt')
                     extracted_srt = self.extract_chinese_from_bilingual_srt(srt_path, temp_chinese_srt)

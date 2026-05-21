@@ -248,7 +248,7 @@ class SubtitleGeneratorWindow(QMainWindow):
         buttons = QHBoxLayout()
         self.generate_btn = QPushButton("生成字幕")
         self.generate_btn.clicked.connect(self.generate_subtitles)
-        self.burn_btn = QPushButton("烧录硬字幕")
+        self.burn_btn = QPushButton("烧录中文字幕")
         self.burn_btn.clicked.connect(self.burn_subtitles)
         self.clear_btn = QPushButton("清空")
         self.clear_btn.clicked.connect(self.clear_all)
@@ -460,7 +460,7 @@ class SubtitleGeneratorWindow(QMainWindow):
             "1. 选择视频和输出目录。\n"
             "2. 选择模型档位：Fast 适合有限显存，Balanced 提升翻译质量，Accurate 提升识别质量。\n"
             "3. 默认输出双语 SRT 和同名 _styled.ass 彩色中文字幕。\n"
-            "4. 烧录硬字幕时会优先使用 _styled.ass，以保留说话人颜色。\n"
+            "4. 烧录时只会把中文字幕写入视频，并优先使用 _styled.ass 保留说话人颜色。\n"
             "5. Traditional Chinese 由 OpenCC 后处理生成。",
         )
 
