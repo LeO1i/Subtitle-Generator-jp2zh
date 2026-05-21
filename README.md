@@ -36,9 +36,35 @@
 4. 或手动安装：
    - `pip install -r requirements.txt`
 
-## 启动方式
+## 打包为 Windows 应用（推荐）
 
-### 方式一：GUI（推荐）
+如果希望像普通 Windows 软件一样双击图标启动应用，可以在开发机上构建 standalone 版本：
+
+1. 先运行一次 `install.bat` 安装依赖
+2. 运行 `build_app.bat`
+3. 构建完成后双击：
+   - `dist\JapaneseSubtitleGenerator\JapaneseSubtitleGenerator.exe`
+
+构建输出目录结构：
+
+```text
+dist\JapaneseSubtitleGenerator\
+  JapaneseSubtitleGenerator.exe
+  _internal\
+  ffmpeg\              # 如果你提供本地 ffmpeg 文件夹，会一起打包
+```
+
+建议将 `JapaneseSubtitleGenerator.exe` 固定到桌面或任务栏。正常使用时不需要运行 `.bat` 文件。
+
+注意：
+- 打包使用 PyInstaller `onedir` 模式，启动更快，也更适合 PyTorch / PySide6
+- Hugging Face 模型权重不会被打进 exe，首次运行仍会下载模型
+- 如果要内置 FFmpeg，可在项目根目录放置 `ffmpeg\ffmpeg.exe` 和 `ffmpeg\ffprobe.exe` 后再运行 `build_app.bat`
+- GPU / CPU 依赖与构建机器环境相关，建议在目标运行环境相近的机器上构建
+
+## 开发启动方式
+
+### 方式一：GUI（开发用）
 
 运行：
 - 双击 `run.bat`

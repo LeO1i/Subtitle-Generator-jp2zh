@@ -1,0 +1,16 @@
+# Later development
+
+## Validation (standalone Windows app)
+
+- [ ] Run full PyInstaller build via build_app.bat on Windows 11
+- [ ] Confirm dist/JapaneseSubtitleGenerator/JapaneseSubtitleGenerator.exe launches without a console window
+- [ ] Verify app icon appears on the exe, taskbar, and window title bar
+- [ ] Test bundled ffmpeg resolution when ffmpeg/ is included in the build output
+- [ ] Test fallback to system PATH ffmpeg when bundled ffmpeg is not present
+- [ ] Smoke test subtitle generation from the packaged exe (short sample video)
+- [ ] Smoke test hardsub burn from the packaged exe using generated ASS/SRT
+- [ ] Confirm first-run Hugging Face model download still works from the frozen app
+- [ ] Measure packaged folder size and document expected disk usage
+- [ ] Test GPU build on CUDA machine and CPU-only fallback behavior
+- [ ] Check Windows Defender / antivirus false-positive behavior for the packaged exe
+- [ ] Zip dist/JapaneseSubtitleGenerator and verify launch after extraction on a clean machine

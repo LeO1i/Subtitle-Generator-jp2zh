@@ -1,10 +1,11 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import torch
 from PySide6.QtCore import QObject, QThread, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -29,6 +30,19 @@ from PySide6.QtWidgets import (
 from ffmpeg_utils import subprocess_kwargs as _subprocess_kwargs
 from speech_extract import JapaneseVideoSubtitleGenerator
 from write_sutitle import WriteSubtitle
+
+
+def resource_path(relative_path):
+    base_path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base_path / relative_path
+
+
+def app_icon():
+    for relative_path in ("assets/app.ico", "assets/app.svg"):
+        path = resource_path(relative_path)
+        if path.exists():
+            return QIcon(str(path))
+    return QIcon()
 
 
 MODEL_TIERS = {
@@ -131,6 +145,7 @@ class SubtitleGeneratorWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("日语视频繁体中文字幕生成器")
+        self.setWindowIcon(app_icon())
         self.resize(980, 780)
         self.worker_thread = None
         self.worker = None
@@ -461,6 +476,7 @@ class SubtitleGeneratorWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setWindowIcon(app_icon())
     window = SubtitleGeneratorWindow()
     window.show()
     sys.exit(app.exec())
