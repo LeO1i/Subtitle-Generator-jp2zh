@@ -5,3 +5,9 @@ test_gui.py
 UIrelated
 llmtranslate.py
 *.json
+__pycache__/
+*.wav
+todo.txt
+build/
+dist/
+packaging/
