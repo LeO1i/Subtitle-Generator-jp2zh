@@ -3,6 +3,8 @@
 import os
 import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 
 def subprocess_kwargs():
@@ -13,8 +15,30 @@ def subprocess_kwargs():
     return kwargs
 
 
+def _bundled_binary(name):
+    candidates = []
+    if getattr(sys, "frozen", False):
+        executable_dir = Path(sys.executable).resolve().parent
+        candidates.extend(
+            [
+                executable_dir / "ffmpeg" / name,
+                executable_dir / "_internal" / "ffmpeg" / name,
+            ]
+        )
+        bundle_root = Path(getattr(sys, "_MEIPASS", executable_dir))
+        candidates.append(bundle_root / "ffmpeg" / name)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def find_ffmpeg():
-    """Locate the ffmpeg binary (PATH first, then Windows fallback)."""
+    """Locate ffmpeg, preferring bundled binaries in packaged builds."""
+    ffmpeg_bin = _bundled_binary("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    if ffmpeg_bin:
+        return ffmpeg_bin
     ffmpeg_bin = shutil.which("ffmpeg")
     if ffmpeg_bin:
         return ffmpeg_bin
@@ -25,7 +49,10 @@ def find_ffmpeg():
 
 
 def find_ffprobe():
-    """Locate the ffprobe binary (PATH first, then Windows fallback)."""
+    """Locate ffprobe, preferring bundled binaries in packaged builds."""
+    ffprobe_bin = _bundled_binary("ffprobe.exe" if os.name == "nt" else "ffprobe")
+    if ffprobe_bin:
+        return ffprobe_bin
     ffprobe_bin = shutil.which("ffprobe")
     if ffprobe_bin:
         return ffprobe_bin

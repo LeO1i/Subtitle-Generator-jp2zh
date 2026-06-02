@@ -15,7 +15,7 @@ if errorlevel 1 (
 )
 
 REM Check if required packages are installed
-python -c "import torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr" >nul 2>&1
+python -c "import torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr, PySide6, opencc, numpy, sklearn, resemblyzer" >nul 2>&1
 if errorlevel 1 (
     echo 缺少必要依赖，正在安装...
     pip install -r requirements.txt
