@@ -15,10 +15,13 @@ if errorlevel 1 (
 )
 
 REM Check if required packages are installed
-python -c "import torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr, PySide6, opencc, numpy, sklearn, resemblyzer" >nul 2>&1
+python -c "import japanese_subtitle, torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr, PySide6, opencc, numpy, sklearn, resemblyzer" >nul 2>&1
 if errorlevel 1 (
     echo 缺少必要依赖，正在安装...
-    pip install -r requirements.txt
+    pip install -e .
+    if errorlevel 1 (
+        pip install -r requirements.txt
+    )
     if errorlevel 1 (
         echo 依赖安装失败
         echo 请运行：pip install -r requirements.txt
@@ -40,9 +43,9 @@ REM Launch GUI detached so this window can close without affecting the app
 REM Prefer pythonw (no console). Fallback to python if pythonw not available.
 where pythonw >nul 2>&1
 if %errorlevel%==0 (
-    start "" pythonw gui.py
+    start "" pythonw -m japanese_subtitle.app.gui
 ) else (
-    start "" python gui.py
+    start "" python -m japanese_subtitle.app.gui
 )
 
 REM Exit the launcher window now

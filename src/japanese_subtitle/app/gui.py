@@ -1,11 +1,10 @@
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import torch
 from PySide6.QtCore import QObject, QThread, Signal
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -20,54 +19,20 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPushButton,
-    QProgressBar,
     QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
-from ffmpeg_utils import subprocess_kwargs as _subprocess_kwargs
-from speech_extract import JapaneseVideoSubtitleGenerator
-from write_sutitle import WriteSubtitle
+from japanese_subtitle.app.resources import app_icon
+from japanese_subtitle.config.model_tiers import get_gui_tier_options
+from japanese_subtitle.config.pipeline_config import PipelineConfig
+from japanese_subtitle.media.ffmpeg import subprocess_kwargs as _subprocess_kwargs
+from japanese_subtitle.services.subtitle_service import SubtitleService
 
-
-def resource_path(relative_path):
-    base_path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    return base_path / relative_path
-
-
-def app_icon():
-    for relative_path in ("assets/app.ico", "assets/app.svg"):
-        path = resource_path(relative_path)
-        if path.exists():
-            return QIcon(str(path))
-    return QIcon()
-
-
-MODEL_TIERS = {
-    "Fast": {
-        "key": "fast",
-        "asr": "Qwen/Qwen3-ASR-0.6B",
-        "mt": "Helsinki-NLP/opus-mt-ja-zh",
-        "chunk": "90",
-        "quality": "fast",
-    },
-    "Balanced": {
-        "key": "balanced",
-        "asr": "Qwen/Qwen3-ASR-0.6B",
-        "mt": "tencent/HY-MT1.5-1.8B",
-        "chunk": "90",
-        "quality": "fast",
-    },
-    "Accurate": {
-        "key": "accurate",
-        "asr": "Qwen/Qwen3-ASR-1.7B",
-        "mt": "tencent/HY-MT1.5-1.8B",
-        "chunk": "60",
-        "quality": "accurate",
-    },
-}
+MODEL_TIERS = get_gui_tier_options()
 
 
 class SubtitleWorker(QObject):
@@ -75,43 +40,23 @@ class SubtitleWorker(QObject):
     log = Signal(str)
     finished = Signal(bool, str)
 
-    def __init__(self, config):
+    def __init__(self, config: PipelineConfig):
         super().__init__()
         self.config = config
 
     def run(self):
         try:
             self.log.emit("开始生成字幕...")
-            self.log.emit(f"模型档位：{self.config['model_tier']}")
-            self.log.emit(f"ASR 模型：{self.config['asr_model']}")
-            self.log.emit(f"MT 模型：{self.config['mt_model']}")
-            generator = JapaneseVideoSubtitleGenerator(
-                model_tier=self.config["model_tier"],
-                asr_model_id=self.config["asr_model"],
-                mt_model_id=self.config["mt_model"],
-                use_advanced_mt=self.config["use_advanced_mt"],
-                quality_mode=self.config["quality_mode"],
-                glossary_path=self.config["glossary_path"],
-                asr_terms_path=self.config["asr_terms_path"],
-                audio_preset=self.config["audio_preset"],
-                enable_speaker_diarization=self.config["enable_speaker_diarization"],
-                device=self.config["device"],
-                progress_callback=lambda value, message: self.progress.emit(value, message),
-            )
-            srt_path = generator.process_video(
-                self.config["video_path"],
-                self.config["output_dir"],
-                chunk_size_seconds=int(self.config["chunk_size"]),
-                overlap_seconds=float(self.config["overlap"]),
-                quality_mode=self.config["quality_mode"],
-                glossary_path=self.config["glossary_path"],
-                asr_terms_path=self.config["asr_terms_path"],
-                audio_preset=self.config["audio_preset"],
-            )
-            if srt_path:
-                self.finished.emit(True, srt_path)
+            self.log.emit(f"模型档位：{self.config.model_tier}")
+            self.log.emit(f"ASR 模型：{self.config.asr_model_id}")
+            self.log.emit(f"MT 模型：{self.config.mt_model_id}")
+            service = SubtitleService(log_callback=lambda message: self.log.emit(message))
+            self.config.progress_callback = lambda value, message: self.progress.emit(value, message)
+            result = service.generate_subtitles(self.config)
+            if result.success and result.output_path:
+                self.finished.emit(True, str(result.output_path))
             else:
-                self.finished.emit(False, "字幕生成失败，请查看日志。")
+                self.finished.emit(False, result.message)
         except Exception as err:
             self.finished.emit(False, str(err))
 
@@ -131,12 +76,13 @@ class BurnWorker(QObject):
         try:
             self.progress.emit(10, "准备烧录字幕...")
             self.log.emit(f"输出视频：{self.output_path}")
-            success = WriteSubtitle().burn_subtitles(self.video_path, self.subtitle_path, self.output_path)
-            if success:
+            service = SubtitleService(log_callback=lambda message: self.log.emit(message))
+            result = service.burn_subtitles(self.video_path, self.subtitle_path, self.output_path)
+            if result.success:
                 self.progress.emit(100, "烧录完成")
-                self.finished.emit(True, self.output_path)
+                self.finished.emit(True, str(result.output_path))
             else:
-                self.finished.emit(False, "字幕烧录失败，请查看日志。")
+                self.finished.emit(False, result.message)
         except Exception as err:
             self.finished.emit(False, str(err))
 
@@ -197,7 +143,7 @@ class SubtitleGeneratorWindow(QMainWindow):
         self.model_tier.currentTextChanged.connect(self._apply_tier_defaults)
         form.addWidget(self.model_tier, 3, 1)
 
-        self.speaker_detection = QCheckBox("启用说话人识别，仅保留前 3 位响度说话人")
+        self.speaker_detection = QCheckBox("识别说话人并彩色标注前 3 位（保留全部语音）")
         self.speaker_detection.setChecked(True)
         form.addWidget(self.speaker_detection, 3, 2)
 
@@ -279,14 +225,18 @@ class SubtitleGeneratorWindow(QMainWindow):
         layout.addWidget(button, row, 2)
 
     def _browse_video(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择视频文件", "", "视频文件 (*.mp4 *.mkv *.avi *.mov *.wmv *.flv);;所有文件 (*.*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择视频文件", "", "视频文件 (*.mp4 *.mkv *.avi *.mov *.wmv *.flv);;所有文件 (*.*)"
+        )
         if path:
             self.video_path.setText(path)
             if not self.output_dir.text().strip():
                 self.output_dir.setText(os.path.dirname(path))
 
     def _browse_subtitle(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择字幕文件", self.output_dir.text() or "", "字幕文件 (*.srt *.ass);;所有文件 (*.*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择字幕文件", self.output_dir.text() or "", "字幕文件 (*.srt *.ass);;所有文件 (*.*)"
+        )
         if path:
             self.srt_path.setText(path)
 
@@ -296,21 +246,25 @@ class SubtitleGeneratorWindow(QMainWindow):
             self.output_dir.setText(path)
 
     def _browse_glossary(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择术语表文件", "", "文本文件 (*.txt *.tsv *.csv);;所有文件 (*.*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择术语表文件", "", "文本文件 (*.txt *.tsv *.csv);;所有文件 (*.*)"
+        )
         if path:
             self.glossary_path.setText(path)
 
     def _browse_asr_terms(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择 ASR 术语/修正文件", "", "文本文件 (*.txt *.tsv *.csv);;所有文件 (*.*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 ASR 术语/修正文件", "", "文本文件 (*.txt *.tsv *.csv);;所有文件 (*.*)"
+        )
         if path:
             self.asr_terms_path.setText(path)
 
     def _apply_tier_defaults(self):
-        tier = MODEL_TIERS.get(self.model_tier.currentText(), MODEL_TIERS["Fast"])
-        self.asr_model.setCurrentText(tier["asr"])
-        self.mt_model.setCurrentText(tier["mt"])
-        self.chunk_size.setText(tier["chunk"])
-        self.quality_mode.setCurrentText(tier["quality"])
+        tier = MODEL_TIERS.get(self.model_tier.currentText(), list(MODEL_TIERS.values())[0])
+        self.asr_model.setCurrentText(tier.asr)
+        self.mt_model.setCurrentText(tier.mt)
+        self.chunk_size.setText(tier.chunk)
+        self.quality_mode.setCurrentText(tier.quality)
 
     def _set_processing(self, processing):
         for button in [self.generate_btn, self.burn_btn, self.clear_btn]:
@@ -343,7 +297,10 @@ class SubtitleGeneratorWindow(QMainWindow):
         except Exception:
             QMessageBox.critical(self, "错误", "分块时长必须为 30-600，重叠时长必须为 0-10。")
             return False
-        for label, path in [("术语表文件", self.glossary_path.text().strip()), ("ASR 术语/修正文件", self.asr_terms_path.text().strip())]:
+        for label, path in [
+            ("术语表文件", self.glossary_path.text().strip()),
+            ("ASR 术语/修正文件", self.asr_terms_path.text().strip()),
+        ]:
             if path and not os.path.exists(path):
                 QMessageBox.critical(self, "错误", f"{label}不存在。")
                 return False
@@ -372,23 +329,23 @@ class SubtitleGeneratorWindow(QMainWindow):
     def generate_subtitles(self):
         if not self._validate_common():
             return
-        tier = MODEL_TIERS.get(self.model_tier.currentText(), MODEL_TIERS["Fast"])
-        config = {
-            "video_path": self.video_path.text().strip(),
-            "output_dir": self.output_dir.text().strip(),
-            "model_tier": tier["key"],
-            "asr_model": self.asr_model.currentText().strip(),
-            "mt_model": self.mt_model.currentText().strip(),
-            "use_advanced_mt": self.use_advanced_mt.isChecked(),
-            "quality_mode": self.quality_mode.currentText().strip(),
-            "chunk_size": self.chunk_size.text().strip(),
-            "overlap": self.overlap.text().strip(),
-            "audio_preset": self.audio_preset.currentText().strip(),
-            "glossary_path": self.glossary_path.text().strip() or None,
-            "asr_terms_path": self.asr_terms_path.text().strip() or None,
-            "enable_speaker_diarization": self.speaker_detection.isChecked(),
-            "device": "cuda:0",
-        }
+        tier = MODEL_TIERS.get(self.model_tier.currentText(), list(MODEL_TIERS.values())[0])
+        config = PipelineConfig(
+            video_path=self.video_path.text().strip(),
+            output_dir=self.output_dir.text().strip(),
+            model_tier=tier.key,
+            asr_model_id=self.asr_model.currentText().strip(),
+            mt_model_id=self.mt_model.currentText().strip(),
+            use_advanced_mt=self.use_advanced_mt.isChecked(),
+            quality_mode=self.quality_mode.currentText().strip(),
+            chunk_size_seconds=int(self.chunk_size.text().strip()),
+            overlap_seconds=float(self.overlap.text().strip()),
+            audio_preset=self.audio_preset.currentText().strip(),
+            glossary_path=self.glossary_path.text().strip() or None,
+            asr_terms_path=self.asr_terms_path.text().strip() or None,
+            enable_speaker_diarization=self.speaker_detection.isChecked(),
+            device="cuda:0",
+        )
         self._start_worker(SubtitleWorker(config))
 
     def burn_subtitles(self):
@@ -460,8 +417,10 @@ class SubtitleGeneratorWindow(QMainWindow):
             "1. 选择视频和输出目录。\n"
             "2. 选择模型档位：Fast 适合有限显存，Balanced 提升翻译质量，Accurate 提升识别质量。\n"
             "3. 默认输出双语 SRT 和同名 _styled.ass 彩色中文字幕。\n"
-            "4. 烧录时只会把中文字幕写入视频，并优先使用 _styled.ass 保留说话人颜色。\n"
-            "5. Traditional Chinese 由 OpenCC 后处理生成。",
+            "4. 说话人识别仅用于彩色标注，不会丢弃其他语音。\n"
+            "5. 烧录时只会把中文字幕写入视频，并优先使用 _styled.ass 保留说话人颜色。\n"
+            "6. 若续跑旧检查点后字幕仍有缺失，请删除 _checkpoints 文件夹后重新生成。\n"
+            "7. Traditional Chinese 由 OpenCC 后处理生成。",
         )
 
     def closeEvent(self, event):

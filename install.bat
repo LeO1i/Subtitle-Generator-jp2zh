@@ -42,19 +42,23 @@ echo PyTorch 安装完成 ✓
 
 REM Install other dependencies
 echo.
-echo 正在安装 Hugging Face 相关依赖...
-pip install -r requirements.txt
+echo 正在安装项目依赖...
+pip install -e ".[dev]"
 if errorlevel 1 (
-    echo 依赖安装失败
-    pause
-    exit /b 1
+    echo 项目安装失败，正在回退到 requirements.txt...
+    pip install -r requirements.txt
+    if errorlevel 1 (
+        echo 依赖安装失败
+        pause
+        exit /b 1
+    )
 )
 
 echo 依赖安装完成 ✓
 
 echo.
 echo 正在验证关键依赖导入...
-python -c "import torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr, PySide6, opencc, numpy, sklearn, resemblyzer" >nul 2>&1
+python -c "import japanese_subtitle, torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr, PySide6, opencc, numpy, sklearn, resemblyzer" >nul 2>&1
 if errorlevel 1 (
     echo 导入检查失败。请运行：pip install -r requirements.txt
     pause

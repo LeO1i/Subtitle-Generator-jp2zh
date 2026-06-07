@@ -1,16 +1,11 @@
+from __future__ import annotations
+
 import math
 import wave
-from dataclasses import dataclass
 
 import numpy as np
 
-
-@dataclass
-class SpeakerWindow:
-    start: float
-    end: float
-    speaker_id: str
-    loudness: float
+from japanese_subtitle.domain.models import Segment, SpeakerWindow
 
 
 def _read_mono_wav(audio_path):
@@ -132,13 +127,7 @@ def _cluster_with_resemblyzer(audio, sample_rate, speech_segments):
     return [(segment[0], segment[1], segment[2], int(label)) for segment, label in zip(usable, labels)]
 
 
-def get_top_speaker_windows(audio_path, top_n=3):
-    """
-    Return speech windows for the loudest speakers.
-
-    Uses Resemblyzer + agglomerative clustering when installed. If optional
-    packages are missing, falls back to one speaker made from VAD windows.
-    """
+def get_top_speaker_windows(audio_path, top_n=3) -> list[SpeakerWindow]:
     audio, sample_rate = _read_mono_wav(audio_path)
     speech_segments = _vad_segments(audio, sample_rate)
     if not speech_segments:
@@ -148,7 +137,7 @@ def get_top_speaker_windows(audio_path, top_n=3):
     if clustered is None:
         clustered = [(start, end, loudness, 0) for start, end, loudness in speech_segments]
 
-    speaker_energy = {}
+    speaker_energy: dict[int, float] = {}
     for start, end, loudness, label in clustered:
         duration = max(0.0, end - start)
         speaker_energy[label] = speaker_energy.get(label, 0.0) + loudness * duration
@@ -159,7 +148,7 @@ def get_top_speaker_windows(audio_path, top_n=3):
     ]
     label_to_speaker = {label: f"Speaker{index + 1}" for index, label in enumerate(ranked_labels)}
 
-    windows = []
+    windows: list[SpeakerWindow] = []
     for start, end, loudness, label in clustered:
         speaker_id = label_to_speaker.get(label)
         if not speaker_id:
@@ -169,9 +158,13 @@ def get_top_speaker_windows(audio_path, top_n=3):
     return windows
 
 
-def assign_speaker(segment, speaker_windows, min_overlap=0.05):
-    start = float(segment.get("start", 0.0))
-    end = float(segment.get("end", start))
+def assign_speaker(segment: Segment | dict, speaker_windows: list[SpeakerWindow], min_overlap=0.05) -> str | None:
+    if isinstance(segment, Segment):
+        start = segment.start
+        end = segment.end
+    else:
+        start = float(segment.get("start", 0.0))
+        end = float(segment.get("end", start))
     best_window = None
     best_overlap = 0.0
 

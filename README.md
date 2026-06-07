@@ -34,7 +34,8 @@
    - 双击运行 `install.bat`
    - 脚本会优先安装 CUDA 版 PyTorch，失败时自动回退
 4. 或手动安装：
-   - `pip install -r requirements.txt`
+   - `pip install -e ".[dev]"`（推荐）
+   - 或 `pip install -r requirements.txt`
 
 ## 打包为 Windows 应用（推荐）
 
@@ -66,8 +67,9 @@ dist\JapaneseSubtitleGenerator\
 
 ### 方式一：GUI（开发用）
 
-运行：
+运行（任选其一）：
 - 双击 `run.bat`
+- `python -m japanese_subtitle.app.gui`
 
 GUI 中可配置：
 - 视频文件、输出目录
@@ -90,7 +92,7 @@ GUI 中可配置：
 ### 方式二：CLI
 
 运行：
-- `python main.py`
+- `python -m japanese_subtitle.app.cli`
 
 CLI 会交互询问：
 - ASR/MT 模型
@@ -136,6 +138,7 @@ CLI 会交互询问：
 - 音频会按分块处理，并在块之间保留重叠，减少断句误差
 - 每个视频会生成对应检查点目录：`<video_name>_checkpoints`
 - 如果中途中断，重新运行后会自动续跑已完成分块
+- 若续跑旧检查点后字幕仍有缺失（例如说话人过滤导致的时间空白），请删除 `<video_name>_checkpoints` 文件夹后重新生成
 - 最终输出时会自动映射回全局时间轴，生成完整 `.srt`
 
 ## 输出说明
