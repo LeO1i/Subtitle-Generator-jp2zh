@@ -4,7 +4,7 @@
 
 当前版本基于 Hugging Face 模型流程：
 - 默认语音识别（ASR）：`Qwen/Qwen3-ASR-0.6B`
-- 默认机器翻译（MT）：`Helsinki-NLP/opus-mt-ja-zh`
+- 默认机器翻译（MT）：`tencent/Hy-MT2-7B`
 - 默认输出：繁體中文字幕（OpenCC 后处理）
 - 可选高级翻译链路：优先尝试 7B 级模型，失败后自动回退
 
@@ -22,9 +22,10 @@
 ## 环境要求
 
 - Windows 10 / 11
-- Python 3.9 及以上
+- Python 3.9 及以上（推荐 3.11；创建 `.venv` 时会优先使用 `py -3.11`）
 - FFmpeg（已加入 PATH，或安装在 `C:\ffmpeg\...`）
 - 建议使用 NVIDIA GPU（支持 CPU 回退，但速度明显更慢）
+- 开发时会在项目根目录自动创建 `.venv` 虚拟环境（无需手动管理）
 
 ## 安装步骤
 
@@ -32,10 +33,13 @@
 2. 安装 FFmpeg：https://ffmpeg.org/download.html
 3. 安装依赖（推荐）：
    - 双击运行 `install.bat`
-   - 脚本会优先安装 CUDA 版 PyTorch，失败时自动回退
-4. 或手动安装：
-   - `pip install -e ".[dev]"`（推荐）
-   - 或 `pip install -r requirements.txt`
+   - 脚本会自动创建 `.venv` 并在其中安装依赖
+   - 会优先安装 CUDA 版 PyTorch，失败时自动回退
+4. 手动安装（仅开发调试用）：
+   - `python -m venv .venv`
+   - `.venv\Scripts\activate`
+   - `python -m pip install -U pip`
+   - `python -m pip install -e ".[dev]"`
 
 ## 打包为 Windows 应用（推荐）
 
@@ -61,15 +65,16 @@ dist\JapaneseSubtitleGenerator\
 - 打包使用 PyInstaller `onedir` 模式，启动更快，也更适合 PyTorch / PySide6
 - Hugging Face 模型权重不会被打进 exe，首次运行仍会下载模型
 - 如果要内置 FFmpeg，可在项目根目录放置 `ffmpeg\ffmpeg.exe` 和 `ffmpeg\ffprobe.exe` 后再运行 `build_app.bat`
-- GPU / CPU 依赖与构建机器环境相关，建议在目标运行环境相近的机器上构建
+- **GPU / CPU 与构建机器绑定**：`build_app.bat` 会安装 CUDA 版 PyTorch（cu128）后再打包；若构建时检测不到 GPU，打出来的 exe 也只能 CPU 运行。建议在已装好 NVIDIA 驱动的开发机上构建
+- **不需要 torchvision**：本项目的 ASR（Qwen3-ASR）和翻译（Hy-MT / HY-MT）都是**音频 + 文本**流程，不使用图像识别。`torchvision` 是 PyTorch 的图像处理库，仅在被 `transformers` 的多模态/视觉功能用到；与本项目无关。打包时会移除它，避免与 `torch` 版本不匹配导致 exe 启动失败。GPU 加速仍由 `torch`（CUDA）提供
 
 ## 开发启动方式
 
 ### 方式一：GUI（开发用）
 
 运行（任选其一）：
-- 双击 `run.bat`
-- `python -m japanese_subtitle.app.gui`
+- 双击 `run.bat`（使用 `.venv`）
+- `.venv\Scripts\python.exe -m japanese_subtitle.app.gui`
 
 GUI 中可配置：
 - 视频文件、输出目录
@@ -92,7 +97,7 @@ GUI 中可配置：
 ### 方式二：CLI
 
 运行：
-- `python -m japanese_subtitle.app.cli`
+- `.venv\Scripts\python.exe -m japanese_subtitle.app.cli`
 
 CLI 会交互询问：
 - ASR/MT 模型
@@ -154,7 +159,7 @@ CLI 会交互询问：
 
 | 档位 | ASR | MT | 默认分块 | 适用场景 |
 |------|-----|----|----------|----------|
-| Fast | `Qwen/Qwen3-ASR-0.6B` | `Helsinki-NLP/opus-mt-ja-zh` | 90 秒 | 有限显存、长视频 |
+| Fast | `Qwen/Qwen3-ASR-0.6B` | `tencent/Hy-MT2-7B` | 90 秒 | 有限显存、长视频 |
 | Balanced | `Qwen/Qwen3-ASR-0.6B` | `tencent/HY-MT1.5-1.8B` | 90 秒 | 更好的翻译质量 |
 | Accurate | `Qwen/Qwen3-ASR-1.7B` | `tencent/HY-MT1.5-1.8B` | 60 秒 | 短视频或高准确率需求 |
 
@@ -168,11 +173,21 @@ CLI 会交互询问：
 
 ## 常见问题排查
 
-1. **依赖问题**：重新运行 `install.bat`
+1. **依赖问题**：重新运行 `install.bat`（会重建/更新 `.venv` 内依赖）
 2. **找不到 FFmpeg**：确认 `ffmpeg -version` 可执行
 3. **首次运行报模型错误**：检查网络连接后重试
-4. **速度过慢**：确认 PyTorch 已启用 CUDA（不是 CPU-only）
+4. **速度过慢 / GUI 显示 CPU（回退）**：重新运行 `install.bat` 安装 CUDA 版 PyTorch；开发环境可执行 `.venv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available())"` 确认。若用 exe，需在 CUDA 环境正常的机器上重新运行 `build_app.bat` 打包
 5. **内存不足**：减小分块时长，或切换 `fast` 模式
+6. **提示未找到虚拟环境**：先运行 `install.bat`，再运行 `run.bat`
+7. **提示未找到 FFmpeg**：先安装 FFmpeg 并加入 PATH，再运行 `install.bat`
+8. **端到端测试**：运行 `scripts\warmup_models.bat` 后，使用你自己的日语视频做完整流程测试（测试视频不包含在仓库中，生成方法见 `tests\fixtures\README.md`）
+
+## Cursor / VS Code 开发
+
+1. 先运行 `install.bat`
+2. 在 Cursor 中选择解释器：`.venv\Scripts\python.exe`
+3. 终端中激活虚拟环境：`.venv\Scripts\activate`
+4. 运行测试：`.venv\Scripts\python.exe -m pytest`
 
 **开发环境**
 CPU：AMD 9700x

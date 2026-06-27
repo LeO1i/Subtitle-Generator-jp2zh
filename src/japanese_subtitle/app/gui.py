@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from japanese_subtitle.app.resources import app_icon
+from japanese_subtitle.logging_utils import configure_stdio_utf8
 from japanese_subtitle.config.model_tiers import get_gui_tier_options
 from japanese_subtitle.config.pipeline_config import PipelineConfig
 from japanese_subtitle.media.ffmpeg import subprocess_kwargs as _subprocess_kwargs
@@ -156,7 +157,7 @@ class SubtitleGeneratorWindow(QMainWindow):
         form.addWidget(QLabel("MT 模型："), 5, 0)
         self.mt_model = QComboBox()
         self.mt_model.setEditable(True)
-        self.mt_model.addItems(["Helsinki-NLP/opus-mt-ja-zh", "tencent/HY-MT1.5-1.8B"])
+        self.mt_model.addItems(["tencent/Hy-MT2-7B", "tencent/HY-MT1.5-1.8B"])
         form.addWidget(self.mt_model, 5, 1)
         self.use_advanced_mt = QCheckBox("启用高级翻译回退链（优先尝试 7B）")
         form.addWidget(self.use_advanced_mt, 5, 2)
@@ -433,6 +434,7 @@ class SubtitleGeneratorWindow(QMainWindow):
 
 
 def main():
+    configure_stdio_utf8()
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setWindowIcon(app_icon())

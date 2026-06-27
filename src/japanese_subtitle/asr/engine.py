@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -40,6 +41,7 @@ class ASREngine:
         self.asr_terms = list(asr_terms or [])
         self.asr_corrections = dict(asr_corrections or {})
         self.qwen_prompt = self._build_qwen_prompt(self.asr_terms)
+        self._corrections_regex = self._build_corrections_regex(self.asr_corrections)
         self._backend = "transformers"
         self._pipeline = None
         self._qwen_model = None
@@ -74,6 +76,17 @@ class ASREngine:
             return None
         joined = "、".join(cleaned[:32])
         return f"这是日语语音转写任务。请保持专有名词和术语拼写稳定，优先使用以下词汇：{joined}"
+
+    @staticmethod
+    def _build_corrections_regex(corrections: dict[str, str]) -> tuple[re.Pattern, dict[str, str]] | None:
+        items = [(str(src), str(tgt)) for src, tgt in corrections.items() if src and tgt]
+        if not items:
+            return None
+        # Longest-first so overlapping substrings prefer the longest match.
+        items.sort(key=lambda pair: len(pair[0]), reverse=True)
+        pattern = "|".join(re.escape(src) for src, _ in items)
+        mapping = {src: tgt for src, tgt in items}
+        return re.compile(pattern), mapping
 
     def _build_asr_backend(self) -> None:
         if self._is_qwen3_asr():
@@ -245,17 +258,22 @@ class ASREngine:
 
     def _apply_asr_corrections(self, text: str) -> str:
         output = str(text or "")
-        if not output or not self.asr_corrections:
+        if not output or self._corrections_regex is None:
             return output
-        for source, target in self.asr_corrections.items():
-            if source and target:
-                output = output.replace(source, target)
-        return output
+        regex, mapping = self._corrections_regex
+        return regex.sub(lambda match: mapping[match.group(0)], output)
 
-    def transcribe(self, audio_path: Path | str, quality_mode: QualityMode | str = QualityMode.FAST) -> list[Segment]:
+    def transcribe(
+        self,
+        audio_path: Path | str,
+        quality_mode: QualityMode | str = QualityMode.FAST,
+        audio_duration: float | None = None,
+    ) -> list[Segment]:
         quality = quality_mode.value if isinstance(quality_mode, QualityMode) else str(quality_mode)
+        if audio_duration is None:
+            audio_duration = get_audio_duration(audio_path)
+        audio_duration = max(0.5, float(audio_duration))
         if self._backend == "qwen_asr":
-            audio_duration = max(0.5, get_audio_duration(audio_path))
             attempts = [
                 {"language": "Japanese", "return_time_stamps": True},
                 {"language": None, "return_time_stamps": True},
@@ -294,7 +312,7 @@ class ASREngine:
             output = self._pipeline(str(audio_path), return_timestamps=True, generate_kwargs=generate_kwargs)
         except Exception:
             output = self._pipeline(str(audio_path), return_timestamps=True)
-        normalized = self._normalize_segments(output, max(0.5, get_audio_duration(audio_path)))
+        normalized = self._normalize_segments(output, audio_duration)
         for segment in normalized:
             segment.text = self._apply_asr_corrections(segment.text)
         return normalized
@@ -311,14 +329,14 @@ class ASREngine:
             temp_clip = temp_file.name
         try:
             extract_audio_span(audio_path, temp_clip, start_seconds, end_seconds, audio_filter=audio_filter)
-            region_segments = self.transcribe(temp_clip, quality_mode=quality_mode)
-            duration = max(0.1, end_seconds - start_seconds)
+            region_duration = max(0.1, end_seconds - start_seconds)
+            region_segments = self.transcribe(temp_clip, quality_mode=quality_mode, audio_duration=region_duration)
             fixed_segments: list[Segment] = []
             for segment in region_segments:
                 fixed_segments.append(
                     Segment(
-                        start=min(duration, max(0.0, segment.start)) + start_seconds,
-                        end=min(duration, max(0.0, segment.end)) + start_seconds,
+                        start=min(region_duration, max(0.0, segment.start)) + start_seconds,
+                        end=min(region_duration, max(0.0, segment.end)) + start_seconds,
                         text=segment.text,
                         confidence=segment.confidence,
                     )

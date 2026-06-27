@@ -1,19 +1,94 @@
-*.mp4
-test.py
-test_gui.py
-*.srt
-UIrelated
-llmtranslate.py
-*.json
+# ─────────────────────────────────────────────────────────────
+# Python
+# ─────────────────────────────────────────────────────────────
 __pycache__/
-.venv/
+*.py[cod]
+*$py.class
+*.so
 *.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Tool caches
 .ruff_cache/
 .pytest_cache/
-*.wav
-todo.txt
+.mypy_cache/
+.tox/
+.coverage
+htmlcov/
+.hypothesis/
+
+# ─────────────────────────────────────────────────────────────
+# Build / packaging
+# ─────────────────────────────────────────────────────────────
 build/
 dist/
+*.whl
+# Keep the PyInstaller spec; ignore everything else under packaging/
 packaging/*
 !packaging/subtitle_app.spec
+
+# ─────────────────────────────────────────────────────────────
+# Generated media & subtitle output (per-run artifacts)
+# ─────────────────────────────────────────────────────────────
+# All videos are ignored — including the test fixture. Users provide
+# their own video for end-to-end testing (see tests/fixtures/README.md).
+*.mp4
+*.wav
+*.srt
 *.ass
+*.aac
+*.m4a
+*.mp3
+
+# Per-video checkpoint directories (chunk_NNNN.json + translation_memory.json)
+*_checkpoints/
+
+# ─────────────────────────────────────────────────────────────
+# Model / data caches (not committed; downloaded on first run)
+# ─────────────────────────────────────────────────────────────
+.cache/
+models/
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.gguf
+
+# ─────────────────────────────────────────────────────────────
+# IDE / editor / OS
+# ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ─────────────────────────────────────────────────────────────
+# Secrets / local env
+# ─────────────────────────────────────────────────────────────
+.env
+.env.*
+*.local
+
+# ─────────────────────────────────────────────────────────────
+# Logs & scratch files
+# ─────────────────────────────────────────────────────────────
+*.log
+packaging/build.log
+todo.txt
+test.py
+test_gui.py
+llmtranslate.py
+UIrelated

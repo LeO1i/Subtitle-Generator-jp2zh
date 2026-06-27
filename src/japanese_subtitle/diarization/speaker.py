@@ -33,46 +33,45 @@ def _rms(samples):
 def _vad_segments(audio, sample_rate, frame_seconds=0.5, hop_seconds=0.25):
     frame_size = max(1, int(frame_seconds * sample_rate))
     hop_size = max(1, int(hop_seconds * sample_rate))
-    energies = []
-    frames = []
-
-    for start in range(0, max(1, len(audio) - frame_size + 1), hop_size):
-        end = min(len(audio), start + frame_size)
-        frame = audio[start:end]
-        energy = _rms(frame)
-        energies.append(energy)
-        frames.append((start / sample_rate, end / sample_rate, energy))
-
-    if not frames:
+    if audio.size < frame_size:
         return []
 
-    energy_values = np.array(energies, dtype=np.float32)
-    floor = float(np.percentile(energy_values, 30))
-    ceiling = float(np.percentile(energy_values, 85))
+    num_frames = 1 + (audio.size - frame_size) // hop_size
+    if num_frames <= 0:
+        return []
+
+    # Zero-copy sliding-window view over the mono audio buffer.
+    shape = (num_frames, frame_size)
+    strides = (hop_size * audio.strides[0], audio.strides[0])
+    frames = np.lib.stride_tricks.as_strided(audio, shape=shape, strides=strides)
+
+    # Per-frame RMS without materializing a full frames**2 array (einsum streams the reduction).
+    sums_of_squares = np.einsum("ij,ij->i", frames, frames)
+    energies = np.sqrt(sums_of_squares / frame_size + 1e-12)
+
+    floor = float(np.percentile(energies, 30))
+    ceiling = float(np.percentile(energies, 85))
     threshold = max(0.008, floor + (ceiling - floor) * 0.35)
 
+    active = energies >= threshold
+    frame_starts = np.arange(num_frames) * hop_size / float(sample_rate)
+    frame_ends = frame_starts + frame_seconds
+
     segments = []
-    active_start = None
-    active_end = None
-    active_energies = []
-
-    for start, end, energy in frames:
-        if energy >= threshold:
-            if active_start is None:
-                active_start = start
-            active_end = end
-            active_energies.append(energy)
+    i = 0
+    while i < num_frames:
+        if not active[i]:
+            i += 1
             continue
-
-        if active_start is not None:
-            if active_end - active_start >= 0.45:
-                segments.append((active_start, active_end, float(np.mean(active_energies))))
-            active_start = None
-            active_end = None
-            active_energies = []
-
-    if active_start is not None and active_end - active_start >= 0.45:
-        segments.append((active_start, active_end, float(np.mean(active_energies))))
+        j = i
+        while j + 1 < num_frames and active[j + 1]:
+            j += 1
+        seg_start = float(frame_starts[i])
+        seg_end = float(frame_ends[j])
+        if seg_end - seg_start >= 0.45:
+            seg_energy = float(np.mean(energies[i : j + 1]))
+            segments.append((seg_start, seg_end, seg_energy))
+        i = j + 1
 
     return _merge_close_segments(segments)
 
@@ -155,6 +154,7 @@ def get_top_speaker_windows(audio_path, top_n=3) -> list[SpeakerWindow]:
             continue
         windows.append(SpeakerWindow(start=start, end=end, speaker_id=speaker_id, loudness=loudness))
 
+    windows.sort(key=lambda w: w.start)
     return windows
 
 
@@ -169,6 +169,8 @@ def assign_speaker(segment: Segment | dict, speaker_windows: list[SpeakerWindow]
     best_overlap = 0.0
 
     for window in speaker_windows:
+        if window.start > end:
+            break
         overlap = max(0.0, min(end, window.end) - max(start, window.start))
         if overlap > best_overlap:
             best_overlap = overlap

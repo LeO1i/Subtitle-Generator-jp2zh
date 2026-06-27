@@ -128,15 +128,18 @@ class SubtitlePipeline:
         active_audio_filter: str,
         active_audio_preset: str,
         checkpoint_store: CheckpointStore,
-        checkpoint_translation_memory: dict[str, str],
     ) -> list[Segment]:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_chunk:
             chunk_audio_path = temp_chunk.name
         try:
             extract_audio_span(audio_path, chunk_audio_path, chunk.start, chunk.end)
             asr_engine = self.ensure_asr_engine()
-            local_segments = asr_engine.transcribe(chunk_audio_path, quality_mode=active_quality)
             chunk_duration = max(0.1, chunk.end - chunk.start)
+            local_segments = asr_engine.transcribe(
+                chunk_audio_path,
+                quality_mode=active_quality,
+                audio_duration=chunk_duration,
+            )
             local_segments = maybe_recover_chunk_segments(
                 asr_engine,
                 chunk_audio_path,
@@ -228,8 +231,12 @@ class SubtitlePipeline:
             self._emit(0.0, "正在提取音频...")
             extract_audio(video_path, audio_path, audio_preset=active_audio_preset)
             speaker_windows = self._detect_speakers(str(audio_path))
+            if speaker_windows:
+                speaker_windows.sort(key=lambda w: w.start)
             chunks = split_audio_chunks(str(audio_path), active_chunk_size, active_overlap)
             total_chunks = max(1, len(chunks))
+
+            checkpoint_translation_memory.update(checkpoint_store.load_translation_memory())
 
             resumed_chunks = 0
             for chunk in chunks:
@@ -239,7 +246,7 @@ class SubtitlePipeline:
                     logger.info("继续处理：分块 %s 已完成", chunk.index)
                     all_segments.extend(checkpoint_store.segments_from_payload(existing))
                     for source, target in existing.get("translation_memory", {}).items():
-                        checkpoint_translation_memory[source] = target
+                        checkpoint_translation_memory.setdefault(source, target)
                     progress = ((chunk.index + 1) / total_chunks) * 95.0
                     self._emit(progress, f"已续跑分块 {chunk.index + 1}/{total_chunks}")
                     continue
@@ -276,7 +283,6 @@ class SubtitlePipeline:
                         active_audio_filter,
                         active_audio_preset,
                         checkpoint_store,
-                        checkpoint_translation_memory,
                     )
                     checkpoint_store.save(
                         chunk.index,
@@ -285,7 +291,6 @@ class SubtitlePipeline:
                             "chunk_index": chunk.index,
                             "chunk_meta": chunk.to_dict(),
                             "segments": checkpoint_store.segments_to_payload(merged_chunk_segments),
-                            "translation_memory": checkpoint_translation_memory,
                         },
                     )
                     all_segments.extend(merged_chunk_segments)
@@ -305,18 +310,30 @@ class SubtitlePipeline:
             translation_engine = self.ensure_translation_engine()
             translation_engine.memory.update(checkpoint_translation_memory)
             self._emit(96.0, "正在翻译为繁體中文...")
+            segments_to_translate = [seg for seg in merged_segments if not seg.zh_text]
             total_segments = max(1, len(merged_segments))
-            for index, segment in enumerate(merged_segments, start=1):
-                if not segment.zh_text:
-                    segment.zh_text = translation_engine.translate(segment.text, glossary=self.glossary)
-                if index % 10 == 0 or index == total_segments:
-                    percent = 96.0 + (index / total_segments) * 1.0
-                    self._emit(percent, f"正在翻译字幕 {index}/{total_segments}")
+            if segments_to_translate:
+                batch_size = translation_engine.DEFAULT_BATCH_SIZE
+
+                def _on_progress(done: int, total: int) -> None:
+                    percent = 96.0 + (done / max(1, total_segments)) * 1.0
+                    self._emit(percent, f"正在翻译字幕 {done}/{total}")
+
+                translations = translation_engine.translate_batch(
+                    [seg.text for seg in segments_to_translate],
+                    glossary=self.glossary,
+                    batch_size=batch_size,
+                    progress_callback=_on_progress,
+                )
+                for seg, zh in zip(segments_to_translate, translations):
+                    seg.zh_text = zh
 
             self._emit(97.0, "正在写入字幕文件...")
             display_segments = split_segments_for_display(merged_segments)
             write_bilingual_srt(display_segments, subtitle_path)
             write_chinese_ass(display_segments, ass_subtitle_path)
+            if translation_engine.memory:
+                checkpoint_store.save_translation_memory(translation_engine.memory)
             self._emit(100.0, "字幕生成完成")
             logger.info("处理完成。字幕文件：%s", subtitle_path)
             logger.info("已生成彩色 ASS 字幕：%s", ass_subtitle_path)

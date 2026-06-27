@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from japanese_subtitle.domain.models import Segment
 
@@ -104,7 +105,7 @@ def merge_boundary_segments(segments: list[Segment]) -> list[Segment]:
     if not segments:
         return []
     ordered = sorted(segments, key=lambda item: (item.start, item.end))
-    merged = [Segment(**ordered[0].to_dict())]
+    merged = [replace(ordered[0])]
     for current in ordered[1:]:
         prev = merged[-1]
         same_text = prev.text.strip() == current.text.strip()
@@ -116,7 +117,7 @@ def merge_boundary_segments(segments: list[Segment]) -> list[Segment]:
         elif current.start < prev.end and same_text and same_speaker:
             prev.end = max(prev.end, current.end)
         else:
-            merged.append(Segment(**current.to_dict()))
+            merged.append(replace(current))
     return merged
 
 
@@ -125,14 +126,14 @@ def merge_short_context_segments(segments: list[Segment]) -> list[Segment]:
         return []
 
     ordered = sorted(segments, key=lambda item: (item.start, item.end))
-    merged = [Segment(**ordered[0].to_dict())]
+    merged = [replace(ordered[0])]
 
     for current in ordered[1:]:
         prev = merged[-1]
         prev_text = prev.text.strip()
         curr_text = current.text.strip()
         if not prev_text:
-            merged[-1] = Segment(**current.to_dict())
+            merged[-1] = replace(current)
             continue
         if not curr_text:
             continue
@@ -158,6 +159,6 @@ def merge_short_context_segments(segments: list[Segment]) -> list[Segment]:
             prev.confidence = max(prev.confidence, current.confidence)
             prev.quality_flagged = bool(prev.quality_flagged or current.quality_flagged)
         else:
-            merged.append(Segment(**current.to_dict()))
+            merged.append(replace(current))
 
     return merged

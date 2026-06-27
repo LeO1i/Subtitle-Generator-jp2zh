@@ -52,7 +52,6 @@ def test_orchestrator_keeps_unmatched_speaker_segments():
             active_audio_filter=None,
             active_audio_preset="standard",
             checkpoint_store=object(),
-            checkpoint_translation_memory={},
         )
 
     assert len(result) == 1

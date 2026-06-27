@@ -71,15 +71,17 @@ def extract_audio_span(
     audio_filter: str | None = None,
 ) -> None:
     ffmpeg_bin = find_ffmpeg()
+    start = max(0.0, float(start_seconds))
+    duration = max(0.1, float(end_seconds) - start)
     cmd = [
         ffmpeg_bin,
         "-hide_banner",
+        "-ss",
+        str(start),
         "-i",
         str(source_audio_path),
-        "-ss",
-        str(max(0.0, start_seconds)),
-        "-to",
-        str(max(start_seconds + 0.1, end_seconds)),
+        "-t",
+        str(duration),
     ]
     if audio_filter:
         cmd.extend(["-af", str(audio_filter)])

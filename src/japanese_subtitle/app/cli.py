@@ -4,6 +4,7 @@ import os
 import sys
 
 from japanese_subtitle.config.model_tiers import MODEL_TIERS
+from japanese_subtitle.logging_utils import configure_stdio_utf8
 from japanese_subtitle.config.pipeline_config import PipelineConfig
 from japanese_subtitle.services.subtitle_service import SubtitleService
 from japanese_subtitle.subtitles.burn import SubtitleBurner
@@ -15,6 +16,7 @@ def _build_hardsub_path(video_path: str, output_dir: str) -> str:
 
 
 def main() -> int:
+    configure_stdio_utf8()
     print("欢迎使用日语视频字幕生成器！")
     print("你是否已经有本程序生成的日语字幕文件？")
     choice = input("请输入 y 或 n（y=是，n=否）：").strip().lower()
@@ -38,7 +40,7 @@ def main() -> int:
     default_tier = MODEL_TIERS[tier]
     asr_model = input(f"ASR 模型（默认 {default_tier['asr']}）：").strip() or default_tier["asr"]
     mt_model = input(f"MT 模型（默认 {default_tier['mt']}）：").strip() or default_tier["mt"]
-    use_advanced_mt = input("是否先启用高级翻译（优先尝试 HY-MT 7B，失败自动回退）？(y/N)：").strip().lower() == "y"
+    use_advanced_mt = input("是否先启用高级翻译（优先尝试 Hy-MT2-7B，失败自动回退）？(y/N)：").strip().lower() == "y"
     quality_mode = (
         input(f"质量模式 fast/accurate（默认 {default_tier['quality']}）：").strip().lower()
         or default_tier["quality"]

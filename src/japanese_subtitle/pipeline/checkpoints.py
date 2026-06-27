@@ -42,6 +42,24 @@ class CheckpointStore:
         with open(file_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
 
+    def save_translation_memory(self, memory: dict[str, str]) -> None:
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        file_path = self.checkpoint_dir / "translation_memory.json"
+        with open(file_path, "w", encoding="utf-8") as handle:
+            json.dump(memory, handle, ensure_ascii=False, indent=2)
+
+    def load_translation_memory(self) -> dict[str, str]:
+        file_path = self.checkpoint_dir / "translation_memory.json"
+        if not file_path.exists():
+            return {}
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+        except Exception as err:
+            logger.warning("读取翻译记忆失败 %s：%s", file_path, err)
+            return {}
+
     @staticmethod
     def segments_from_payload(payload: dict[str, Any]) -> list[Segment]:
         return segments_from_dicts(payload.get("segments", []))

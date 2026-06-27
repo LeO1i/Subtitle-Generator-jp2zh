@@ -4,49 +4,35 @@ echo 日语字幕生成器
 echo ==============
 echo.
 
-REM Check if Python is available
-python --version >nul 2>&1
+cd /d "%~dp0"
+call scripts\env.bat require
 if errorlevel 1 (
-    echo 错误：未找到 Python
-    echo 请先运行 install.bat 安装依赖
-    echo.
     pause
     exit /b 1
 )
 
-REM Check if required packages are installed
-python -c "import japanese_subtitle, torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr, PySide6, opencc, numpy, sklearn, resemblyzer" >nul 2>&1
+"%PY%" -c "import japanese_subtitle, PySide6" >nul 2>&1
 if errorlevel 1 (
-    echo 缺少必要依赖，正在安装...
-    pip install -e .
-    if errorlevel 1 (
-        pip install -r requirements.txt
-    )
-    if errorlevel 1 (
-        echo 依赖安装失败
-        echo 请运行：pip install -r requirements.txt
-        pause
-        exit /b 1
-    )
+    echo 缺少必要依赖。
+    echo 请运行 install.bat 安装依赖到虚拟环境。
+    pause
+    exit /b 1
 )
 
-REM Check if FFmpeg is available
 ffmpeg -version >nul 2>&1
 if errorlevel 1 (
-    echo 警告：未找到 FFmpeg
-    echo 请从 https://ffmpeg.org/download.html 下载并安装 FFmpeg
+    echo 错误：未找到 FFmpeg
+    echo 请先安装 FFmpeg 并将 ffmpeg 加入 PATH，然后重新运行 run.bat
+    pause
+    exit /b 1
 )
 
 echo 正在启动程序...
 
-REM Launch GUI detached so this window can close without affecting the app
-REM Prefer pythonw (no console). Fallback to python if pythonw not available.
-where pythonw >nul 2>&1
-if %errorlevel%==0 (
-    start "" pythonw -m japanese_subtitle.app.gui
+if exist "%PYW%" (
+    start "" "%PYW%" -m japanese_subtitle.app.gui
 ) else (
-    start "" python -m japanese_subtitle.app.gui
+    start "" "%PY%" -m japanese_subtitle.app.gui
 )
 
-REM Exit the launcher window now
 exit /b 0

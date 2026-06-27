@@ -12,13 +12,13 @@ class ModelTierSpec(TypedDict):
 
 
 DEFAULT_ASR_MODEL = "Qwen/Qwen3-ASR-0.6B"
-DEFAULT_MT_MODEL = "Helsinki-NLP/opus-mt-ja-zh"
-DEFAULT_ADV_MT_MODEL = "tencent/HY-MT1.5-7B"
+DEFAULT_MT_MODEL = "tencent/Hy-MT2-7B"
+DEFAULT_ADV_MT_MODEL = "tencent/Hy-MT2-7B"
 
 MODEL_TIERS: dict[str, ModelTierSpec] = {
     "fast": {
         "asr": "Qwen/Qwen3-ASR-0.6B",
-        "mt": "Helsinki-NLP/opus-mt-ja-zh",
+        "mt": "tencent/Hy-MT2-7B",
         "chunk_size": 90,
         "quality": "fast",
     },
@@ -91,5 +91,7 @@ def normalize_mt_model_id(model_id: str | None) -> str:
     alias_map = {
         "HY-MT1.5-1.8B": "tencent/HY-MT1.5-1.8B",
         "HY-MT1.5-7B": "tencent/HY-MT1.5-7B",
+        "Hy-MT2-7B": "tencent/Hy-MT2-7B",
+        "HY-MT2-7B": "tencent/Hy-MT2-7B",
     }
     return alias_map.get(text, text)

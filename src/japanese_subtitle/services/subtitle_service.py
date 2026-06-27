@@ -27,6 +27,8 @@ class SubtitleService:
         self._handler.setFormatter(logging.Formatter("%(message)s"))
         root.addHandler(self._handler)
         root.setLevel(logging.INFO)
+        # Keep GUI logs on the callback handler only; root StreamHandler uses cp950 on Windows.
+        root.propagate = False
 
     def generate_subtitles(self, config: PipelineConfig) -> JobResult:
         self._attach_logging()
